@@ -1,135 +1,74 @@
 #include <avr/io.h>
 #include <stdio.h>
 #include <util/delay.h>
-//#include "timer.h"
 #include "usart_ATmega1284.h"
 
 
-void adc_init()
-{
-	// AREF = AVcc
-	ADMUX = (1<<REFS0);
+void lockDoor(){
+	unsigned char rotate[] = {0x01, 0x03, 0x02, 0x06, 0x04, 0x0C, 0x08, 0x09};
+	int next = 0;
+	int numPhases;
+	numPhases = ((90/5.625) * 64);
+
 	
-	// ADC Enable and prescaler of 128
-	// 16000000/128 = 125000
-	ADCSRA = (1<<ADEN)|(1<<ADPS2)|(1<<ADPS1)|(1<<ADPS0);
-}
-uint16_t adc_read(uint8_t ch)
-{
-	// select the corresponding channel 0~7
-	// ANDing with ?7? will always keep the value
-	// of ?ch? between 0 and 7
-	ch &= 0b00000111;  // AND operation with 7
-	ADMUX = (ADMUX & 0xF8)|ch; // clears the bottom 3 bits before ORing
+	//rotate counter clockwise to return to original position
+	numPhases = ((90/5.625) * 64);
+	while(numPhases > 0){
+		if(next < 0){
+			next = 7;
+		}
+		else{
+			next--;
+		}
+		numPhases--;
+		_delay_ms(10);
+		PORTB = rotate[next];
+	}
 	
-	// start single convertion
-	// write ?1? to ADSC
-	ADCSRA |= (1<<ADSC);
-	
-	// wait for conversion to complete
-	// ADSC becomes '0; again
-	// till then, run loop continuously
-	while(ADCSRA & (1<<ADSC));
-	
-	return (ADC);
+	return;
 }
 
-
-/*
-/////////////////////////////////////////////////////////////////////////////
-// useful code to copy/paste, should turn these into functions when possible
-
-if(USART_HasReceived(0)){ // if checklist has received any data, then update flag
-	state = update_state;
-	status_flag = USART_Receive(0)&0x07;
-	USART_Flush(0);
-}
-
-LCD_checklist(status_flag); // calling LCD display function
-
-if(USART_IsSendReady(0)){ // transmit data through TX 
-	USART_Send(tempo, 0);
-	while (!USART_HasTransmitted(0));
-}
-
-/////////////////////////////////////////////////////////////////////////////
-*/
-
-enum States {init_state, idle_state, send_state} state;
+void unlockDoor(){
+	unsigned char rotate[] = {0x01, 0x03, 0x02, 0x06, 0x04, 0x0C, 0x08, 0x09};
+	int next = 0;
+	int numPhases;
+	numPhases = ((90/5.625) * 64);
+	 	//rotate clockwise to turn off switch
+	 while(numPhases > 0){
+		 if(next > 7){
+			 next = 0;
+		 }
+		 else{
+			 next++;
+		 }
+		 numPhases--;
+	 	 _delay_ms(10);
+	 	 PORTB = rotate[next];
+	 }
 	
-void tick(){
-	char signal_flag;
-	unsigned char status_flag;
-	//char test_flag; // can be set to buttons in order to test if functions are working approppriately
-	//test_flag = ~PINA;
-	
-	switch(state){ // transitions
-		case init_state:
-			state = idle_state;
-			break;
-		case idle_state:
-			if(USART_HasReceived(0)){ // if sensors receive signal, prepare to send status
-				USART_Flush(0);
-				state = send_state;
-			}
-			break;
-		case send_state:
-			if(USART_IsSendReady(0)){ // transmit data through TX
-				status_flag = ~PINA;
-				USART_Send(status_flag, 0);
-				while (!USART_HasTransmitted(0));
-			}
-			state = idle_state;
-			break;
-		default: break;
-	}// transitions
-	
-	switch(state){// state actions
-		case init_state:
-			break;
-		case idle_state:
-			break;
-		case send_state:
-			break;
-		default: break;
-	} // state actions
+	return;
 }
 
 
 
 int main(void){
 	DDRA = 0x00; PORTA = 0xFF; // ~PINA is input
-	DDRB = 0xFF; PORTB = 0x00; // PORTB is output
+	DDRB = 0x0F; PORTB = 0xF0; // PORTB is output
 	DDRC = 0xFF; PORTC = 0x00; // PORTC is output
 	DDRD = 0xFF; PORTD = 0x00; // PORTD is output
 
-	// adc_init(); // ADC is PIN A0 Analog
-	
-
-	//TimerOn();
-	//TimerSet(50);
 	initUSART(0);
-	
-	state = init_state;
-	unsigned char tempo;
+
+	unsigned char lock_sense;
 	char lock_flag = 0x00;
 	
 	while(1){
 		
-		//tick();
-		
-		//IRTest();
-		// photoresistorTest();
-		
-		tempo = ~PINA;
-		/*
-		if(USART_IsSendReady(0)){
-			USART_Send(tempo, 0);
-			while (!USART_HasTransmitted(0));
-		}//*/
+		// match lock_sense to the status of IR receiver plugged into atmega
+		lock_sense = ~PINA;
 
-		
-		if(tempo == 0x01){
+		// update lock flag based on the value of atmega values input
+		if((lock_sense&0x01) == 0x01){
 			lock_flag = 0x04;
 			PORTC = 0x01;
 		}else{
@@ -137,16 +76,29 @@ int main(void){
 			PORTC = 0x00;
 		}
 		
+		// based on what checklist has sent, either update or lock the door
 		if(USART_HasReceived(0)){
-			if(USART_IsSendReady(0)&& (USART_Receive(0) == 0x04)){
+			if(USART_IsSendReady(0)&& (USART_Receive(0) == 0x04)){ // 0x04: checklist asking for status
 				_delay_ms(50);
 				USART_Send(lock_flag, 0);
 				while (!USART_HasTransmitted(0));
 			}
+			else if(USART_Receive(0) == 0x20){ // 0x20: checklist asking to lock door
+				if(lock_flag == 0x04){
+					lockDoor();
+				}
+			}
 			USART_Flush(0);
 		}
 		
-		//while(!TimerFlag);
-		//TimerFlag = 0;
+		//button to manually lock or unlock the door
+		if((lock_sense&0x02)==0x02){
+			if(lock_flag == 0x04){
+				lockDoor();
+			}
+			else{
+				unlockDoor();
+			}
+		}
 	}
 }
